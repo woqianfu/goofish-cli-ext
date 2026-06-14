@@ -120,63 +120,89 @@ def search_cmd(
     # 微信端纯文本格式
     if wechat:
         console.print()  # 换行
+        rec = result.get("recommended", {})
+
         wechat_lines = [f"🔍 {search_desc} | 共{result['total']}件 | ¥{min_p}~¥{max_p} | 均价¥{avg_p}"]
         wechat_lines.append("")
 
-        # 质优价廉推荐
-        rec = result.get("recommended", {})
+        # 1. ⭐ 捡漏推荐（最优先展示）
+        if rec.get("steals"):
+            wechat_lines.append("⭐ 捡漏推荐（低于市场价30%+）：")
+            for i in rec["steals"][:5]:
+                badge = f" [{i.get('badge','')}]" if i.get('badge') else ""
+                cond2 = i.get("condition", "")
+                loc2 = i.get("location", "")
+                score = i.get("_score_detail", {})
+                ps = " 👤个人" if score.get("is_personal_seller") else ""
+                wechat_lines.append(f"  ¥{i['price']} {cond2} {loc2}{badge}{ps}")
+                wechat_lines.append(f"  {i.get('url', '')}")
+            wechat_lines.append("")
+
+        # 2. 🏆 质优价廉
         if rec.get("best"):
-            wechat_lines.append("🏆 质优价廉推荐：")
+            wechat_lines.append("🏆 质优价廉：")
             for i in rec["best"][:5]:
                 badge = f" [{i.get('badge','')}]" if i.get('badge') else ""
-                loc2 = i.get("location", "")
                 cond2 = i.get("condition", "")
+                loc2 = i.get("location", "")
                 wechat_lines.append(f"  #{i['rank']} ¥{i['price']} {cond2} {loc2}{badge}")
                 wechat_lines.append(f"  {i.get('url', '')}")
             wechat_lines.append("")
 
+        # 3. 👤 个人卖家好价
+        if rec.get("personal_deals"):
+            wechat_lines.append("👤 个人卖家好价：")
+            for i in rec["personal_deals"][:3]:
+                wechat_lines.append(f"  ¥{i['price']} {i['title'][:25]}")
+                wechat_lines.append(f"  {i.get('url', '')}")
+            wechat_lines.append("")
+
+        # 4. 💰 纯低价
         if rec.get("cheapest"):
-            wechat_lines.append("💰 纯低价捡漏：")
+            wechat_lines.append("💰 纯低价：")
             for i in rec["cheapest"][:3]:
-                wechat_lines.append(f"  #{i['rank']} ¥{i['price']} {i['title'][:25]}")
+                wechat_lines.append(f"  ¥{i['price']} {i['title'][:25]}")
                 wechat_lines.append(f"  {i.get('url', '')}")
             wechat_lines.append("")
 
-        if rec.get("good"):
-            wechat_lines.append("✨ 品质好物：")
-            for i in rec["good"][:3]:
-                badge = f" [{i.get('badge','')}]" if i.get('badge') else ""
-                wechat_lines.append(f"  #{i['rank']} ¥{i['price']} {i.get('condition','')} {i.get('location','')}{badge}")
-                wechat_lines.append(f"  {i.get('url', '')}")
-            wechat_lines.append("")
-
-        wechat_lines.append("📎 所有链接均可直接点击打开")
-        wechat_lines.append(f"💡 引擎:{result.get('engine','?')} | 已过滤虚假低价 | 深度搜索")
+        wechat_lines.append("📎 链接可直接点击打开")
+        wechat_lines.append(f"💡 引擎:{result.get('engine','?')} | 深度搜索 | ⭐捡漏 👤个人卖家")
         console.print("\n".join(wechat_lines))
         return
 
-    # 质优价廉推荐
+    # 推荐分组（终端格式）
     if recommend and result.get("recommended"):
         rec = result["recommended"]
+
+        # 1. ⭐ 捡漏推荐
+        if rec.get("steals"):
+            console.print("\n[bold red]⭐ 捡漏推荐（低于市场价30%+）：[/bold red]")
+            for i in rec["steals"][:5]:
+                badge = f" [{i.get('badge','')}]" if i.get('badge') else ""
+                score = i.get("_score_detail", {})
+                ps = " 👤个人卖家" if score.get("is_personal_seller") else ""
+                console.print(f"  ¥{i['price']:>4d}  {i['title'][:45]}  {badge}{ps}")
+                console.print(f"       {i.get('url', '')}")
+
+        # 2. 🏆 质优价廉
         if rec.get("best"):
-            console.print("\n[bold green]🏆 质优价廉推荐（品质好 + 价格低）：[/bold green]")
+            console.print("\n[bold green]🏆 质优价廉（品质好 + 价格低）：[/bold green]")
             for i in rec["best"][:5]:
                 badge = f" [{i.get('badge','')}]" if i.get('badge') else ""
                 console.print(f"  #{i['rank']:2d}  ¥{i['price']:>3d}  {i['title'][:50]}  {badge}")
                 console.print(f"       {i.get('url', '')}")
 
-        if rec.get("cheapest") and len(rec.get("cheapest", [])) > 2:
-            console.print("\n[bold yellow]💰 纯低价捡漏（不管成色，只看价格）：[/bold yellow]")
-            for i in rec["cheapest"][:3]:
-                badge = f" [{i.get('badge','')}]" if i.get('badge') else ""
-                console.print(f"  #{i['rank']:2d}  ¥{i['price']:>3d}  {i['title'][:50]}  {badge}")
+        # 3. 👤 个人卖家好价
+        if rec.get("personal_deals"):
+            console.print("\n[bold cyan]👤 个人卖家好价：[/bold cyan]")
+            for i in rec["personal_deals"][:3]:
+                console.print(f"  #{i['rank']:2d}  ¥{i['price']:>3d}  {i['title'][:50]}")
                 console.print(f"       {i.get('url', '')}")
 
-        if rec.get("good"):
-            console.print("\n[bold blue]✨ 品质好物（成色好、信用高）：[/bold blue]")
-            for i in rec["good"][:3]:
-                badge = f" [{i.get('badge','')}]" if i.get('badge') else ""
-                console.print(f"  #{i['rank']:2d}  ¥{i['price']:>3d}  {i['title'][:50]}  {badge}")
+        if rec.get("cheapest"):
+            console.print("\n[bold yellow]💰 纯低价：[/bold yellow]")
+            for i in rec["cheapest"][:3]:
+                console.print(f"  #{i['rank']:2d}  ¥{i['price']:>3d}  {i['title'][:50]}")
                 console.print(f"       {i.get('url', '')}")
 
     # 结果底部输出链接列表（复制到浏览器打开）

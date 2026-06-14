@@ -126,48 +126,197 @@ def _is_fake_low_price(item: dict) -> bool:
 # 品质评分
 # ============================================================
 
-def _quality_score(item: dict) -> float:
+def _quality_score(item: dict, all_prices: Optional[list[int]] = None) -> dict:
     """
-    综合品质评分（越高越好）
-
-    考虑因素：
-    - 成色（全新 > 99新 > 95新 > 9成新 > 有瑕疵）
-    - 卖家信用（百分百好评 > 信用极好 > 信用优秀 > 无标签）
-    - 标题完整度（字数越多说明描述越详细）
-    - 是否有图片（通过 extra 字段判断）
+    多维品质评分（返回评分解构）
+    
+    从多个维度综合评价一个商品是否「质优价廉」：
+    - 价格优势度：相对同类商品的价格便宜程度（0-30分）
+    - 卖家可信度：信用、个人/职业判断（0-25分）
+    - 商品成色：全新到有瑕疵（0-20分）
+    - 上架新鲜度：刚发布 vs 挂了很久（0-10分）
+    - 描述详尽度：标题长度、真实性（0-15分）
+    
+    Returns:
+        {"total": N, "price_advantage": N, "seller_trust": N,
+         "condition_score": N, "freshness": N, "description_score": N,
+         "is_personal_seller": bool, "is_steal": bool}
     """
-    score = 50.0  # 基准分
-
-    # 成色加分
-    condition = (item.get("condition") or "").lower()
-    if "全新" in condition:
-        score += 30
-    elif "99" in condition:
-        score += 25
-    elif "95" in condition or "几乎" in condition:
-        score += 20
-    elif "9成" in condition:
-        score += 15
-    elif "8成" in condition:
-        score += 10
-
-    # 卖家信用加分
-    badge = (item.get("badge") or "")
-    if "百分百好评" in badge:
-        score += 15
-    elif "信用极好" in badge:
-        score += 10
-    elif "信用优秀" in badge:
-        score += 5
-
-    # 标题完整度（字数越多说明描述越详细，越可信）
+    result = {
+        "total": 0.0,
+        "price_advantage": 0,
+        "seller_trust": 0,
+        "condition_score": 0,
+        "freshness": 0,
+        "description_score": 0,
+        "is_personal_seller": False,
+        "is_steal": False,
+    }
+    
+    price = item.get("price", 99999)
     title = item.get("title", "")
-    if len(title) > 100:
-        score += 5
-    elif len(title) > 50:
-        score += 3
+    badge = item.get("badge", "") or ""
+    condition = (item.get("condition") or "").lower()
+    
+    # ========== 1. 价格优势度 (0-30分) ==========
+    if all_prices and len(all_prices) >= 3:
+        sorted_prices = sorted(all_prices)
+        median_price = sorted_prices[len(sorted_prices) // 2]
+        if median_price > 0 and price > 0:
+            ratio = (median_price - price) / median_price
+            # 比中位数便宜越多分越高
+            if ratio > 0.3:
+                result["price_advantage"] = 30  # 便宜30%以上 = 捡漏级
+                result["is_steal"] = True
+            elif ratio > 0.15:
+                result["price_advantage"] = 25
+            elif ratio > 0.05:
+                result["price_advantage"] = 20
+            elif ratio > -0.05:
+                result["price_advantage"] = 15  # 接近中位数
+            else:
+                result["price_advantage"] = 5   # 比中位数还贵
+        else:
+            result["price_advantage"] = 10
+    else:
+        # 没有参考价格时，低价本身就有优势
+        if price < 100:
+            result["price_advantage"] = 20
+        elif price < 500:
+            result["price_advantage"] = 15
+        else:
+            result["price_advantage"] = 10
+    
+    # ========== 2. 卖家可信度 (0-25分) ==========
+    if "百分百好评" in badge:
+        result["seller_trust"] += 15
+    elif "信用极好" in badge:
+        result["seller_trust"] += 12
+    elif "信用优秀" in badge:
+        result["seller_trust"] += 8
+    elif "信用良好" in badge:
+        result["seller_trust"] += 5
+    else:
+        result["seller_trust"] += 3  # 无标签依然有基础分
+    
+    # 个人卖家识别
+    is_personal = _is_personal_seller(item)
+    result["is_personal_seller"] = is_personal
+    if is_personal:
+        result["seller_trust"] += 10  # 个人卖家信用奖励
+    else:
+        # 疑似商家不扣分，只是不加奖励分
+        pass
+    
+    result["seller_trust"] = min(result["seller_trust"], 25)
+    
+    # ========== 3. 商品成色 (0-20分) ==========
+    if "全新" in condition:
+        result["condition_score"] = 20
+    elif "99新" in condition or "99" in condition:
+        result["condition_score"] = 18
+    elif "95新" in condition or "几乎全新" in condition or "几乎" in condition:
+        result["condition_score"] = 15
+    elif "9成" in condition:
+        result["condition_score"] = 12
+    elif "8成" in condition:
+        result["condition_score"] = 8
+    elif "瑕疵" in condition or "磕碰" in condition or "划痕" in condition:
+        result["condition_score"] = 4
+    else:
+        result["condition_score"] = 10  # 未知成色给中间分
+    
+    # ========== 4. 上架新鲜度 (0-10分) ==========
+    # 通过标题中的时间线索判断
+    title_lower = title.lower()
+    freshness = 5  # 默认中等
+    if any(kw in title for kw in ["刚买", "刚到", "全新刚", "昨天", "今天", "刚刚"]):
+        freshness = 10
+    elif any(kw in title for kw in ["最近", "上个月", "月初"]):
+        freshness = 8
+    elif any(kw in title for kw in ["买来用了没", "买来没", "没用过"]):
+        freshness = 7
+    elif any(kw in title for kw in ["买来用了", "用了几个月", "用了半年"]):
+        freshness = 3
+    result["freshness"] = freshness
+    
+    # ========== 5. 描述详尽度 (0-15分) ==========
+    desc_score = 0
+    title_len = len(title)
+    if title_len > 150:
+        desc_score = 15
+    elif title_len > 100:
+        desc_score = 12
+    elif title_len > 60:
+        desc_score = 8
+    elif title_len > 30:
+        desc_score = 5
+    else:
+        desc_score = 2
+    
+    # 标题包含真实描述信息加分
+    detail_markers = ["购买", "发票", "配件", "包装", "盒说", "箱说",
+                     "正常", "无修", "无拆", "功能", "测试",
+                     "成色", "如图", "实拍", "实物"]
+    for marker in detail_markers:
+        if marker in title:
+            desc_score += 2
+            break
+    result["description_score"] = min(desc_score, 15)
+    
+    result["total"] = (result["price_advantage"] + result["seller_trust"] +
+                      result["condition_score"] + result["freshness"] +
+                      result["description_score"])
+    
+    return result
 
-    return score
+
+def _is_personal_seller(item: dict) -> bool:
+    """
+    判断是否为真实个人卖家（非职业商家）
+    
+    个人卖家的特征：
+    - 标题含有人情味用语："搬家出"、"老婆不让"、"朋友送的"、"年会奖品"
+    - 有个人故事感，不是干巴巴的商品参数列表
+    - 定价是整数（不像职业卖家定 99.9、199）
+    - 没有"正品保障、假一赔十、支持验货"等商家话术
+    - 标题简短不堆砌（职业卖家堆关键词）
+    """
+    title = item.get("title", "")
+    title_lower = title.lower()
+    
+    # 个人卖家正面信号
+    personal_signals = [
+        "搬家", "老婆", "老公", "朋友送", "年会", "奖品",
+        "中奖", "用不上", "换了", "升级了", "闲置",
+        "买多了", "不适合", "冲动消费", "回血",
+        "女朋友", "男友", "家里", "放着", "吃灰",
+        "断舍离", "清仓", "不用了", "买来没用",
+    ]
+    
+    # 职业卖家信号
+    merchant_signals = [
+        "正品保障", "假一赔十", "支持验货", "专柜",
+        "官方正品", "全国联保", "七天无理由",
+        "粉丝福利", "特价清仓", "限量",
+        "专业代购", "实体店", "厂家直销",
+    ]
+    
+    personal_count = sum(1 for s in personal_signals if s in title)
+    merchant_count = sum(1 for s in merchant_signals if s in title_lower)
+    
+    # 综合判断
+    if merchant_count >= 2:
+        return False  # 职业卖家
+    if personal_count >= 1:
+        return True   # 个人卖家
+    
+    # 标题长度判断：太长的多半是职业卖家堆关键词
+    if len(title) > 200:
+        return False
+    
+    # 默认不确定时，倾向于认为是个人卖家
+    return True
 
 
 # ============================================================
@@ -176,44 +325,70 @@ def _quality_score(item: dict) -> float:
 
 def _group_items(items: list[dict]) -> dict:
     """
-    将商品按品质分组
+    将商品按品质分组（基于新评分体系）
 
     返回:
     {
-        "best": [...],      # 质优价廉 — 品质高 + 价格低
-        "cheapest": [...],  # 纯低价 — 不管成色
-        "good": [...],      # 品质好 — 价格稍高但东西好
+        "steals": [...],       # ⭐ 捡漏推荐 — 价格低于中位数30%+
+        "best": [...],         # 🏆 质优价廉 — 综合评分高 + 价格低于中位数
+        "personal_deals": [...], # 👤 个人卖家好价
+        "cheapest": [...],     # 💰 纯低价 — 不管成色
     }
     """
     prices = [i["price"] for i in items]
     if not prices:
-        return {"best": [], "cheapest": [], "good": []}
+        return {"steals": [], "best": [], "personal_deals": [], "cheapest": []}
 
     median_price = sorted(prices)[len(prices) // 2]
 
+    steals = []
     best = []
+    personal_deals = []
     cheapest = []
-    good = []
 
     for item in items:
         price = item["price"]
-        score = _quality_score(item)
+        score_data = _quality_score(item, all_prices=prices)
+        total_score = score_data["total"]
 
-        # 质优价廉：品质分高 + 价格低于中位数
-        if score >= 65 and price <= median_price:
+        # 捡漏：价格低于中位数30%+
+        if score_data["is_steal"]:
+            item["_score"] = total_score
+            item["_score_detail"] = score_data
+            steals.append(item)
+            continue
+
+        # 质优价廉：综合评分 >= 60 且价格 <= 中位数
+        if total_score >= 60 and price <= median_price:
+            item["_score"] = total_score
+            item["_score_detail"] = score_data
             best.append(item)
-        # 纯低价：不管品质，价格最低的那批
-        elif price <= median_price * 0.6:
+            continue
+
+        # 个人卖家好价：个人卖家且价格 <= 中位数
+        if score_data["is_personal_seller"] and price <= median_price:
+            item["_score"] = total_score
+            item["_score_detail"] = score_data
+            personal_deals.append(item)
+            continue
+
+        # 纯低价：同价格最低的那批
+        if price <= median_price * 0.7:
+            item["_score"] = total_score
+            item["_score_detail"] = score_data
             cheapest.append(item)
-        # 品质好：品质分高，价格可以高一点
-        elif score >= 70:
-            good.append(item)
+            continue
 
-    # 每个组内按价格排序
-    for group in [best, cheapest, good]:
-        group.sort(key=lambda x: x["price"])
+    # 每个组内按综合评分排序
+    for group in [steals, best, personal_deals, cheapest]:
+        group.sort(key=lambda x: x.get("_score", 0), reverse=True)
 
-    return {"best": best, "cheapest": cheapest, "good": good}
+    return {
+        "steals": steals[:8],
+        "best": best[:8],
+        "personal_deals": personal_deals[:5],
+        "cheapest": cheapest[:5],
+    }
 
 
 # ============================================================
@@ -222,43 +397,68 @@ def _group_items(items: list[dict]) -> dict:
 
 def _expand_keywords(query: str) -> list[str]:
     """
-    扩展搜索关键词以覆盖更多商品池
-
-    闲鱼的自然排序会把很多商品隐藏掉。
-    用不同的关键词搜索同一商品，可以覆盖不同的商品池。
-
-    例如 "南卡 Clip Super2" 会扩展为：
-    - 南卡 Clip Super2    （原词）
-    - 南卡 ClipSuper2     （无空格）
-    - 南卡 clipsuper2     （小写）
-    - NANK Clip Super2    （品牌英文名）
-    - 南卡 耳夹 蓝牙耳机  （品类词）
+    长尾关键词扩展引擎
+    
+    闲鱼对每个搜索词独立返回前 ~250 条结果。
+    通过生成长尾关键词列表，可以突破单关键词的结果限制。
+    
+    例如 "南卡 Clip Super2" 会扩展为 15+ 个关键词：
+    - 原词变体：南卡 Clip Super2, 南卡ClipSuper2, NANK Clip Super2
+    - 品质后缀：+ 全新, + 二手, + 自用, + 正品, + 包邮, + 实用
+    - 情感后缀：+ 闲置, + 急出, + 搬家出, + 断舍离, + 降价
+    - 品类词：南卡 耳机, 南卡 蓝牙, NANK 耳夹
     """
     keywords = [query]
+    q = query.strip()
 
-    # 去空格版本
-    no_space = query.replace(" ", "").replace("　", "")
-    if no_space != query:
+    # 1. 变体
+    no_space = q.replace(" ", "").replace("　", "")
+    if no_space != q and no_space not in keywords:
         keywords.append(no_space)
-
-    # 小写版本
-    lower = query.lower()
-    if lower != query and lower not in keywords:
+    lower = q.lower()
+    if lower != q and lower not in keywords:
         keywords.append(lower)
 
-    # 品牌替换
+    # 2. 品牌替换（可扩展的品牌映射表）
     brand_map = {
         "南卡": ["NANK", "南卡"],
+        "苹果": ["Apple", "苹果", "iphone"],
+        "华为": ["Huawei", "华为"],
+        "小米": ["Xiaomi", "小米"],
+        "索尼": ["Sony", "索尼"],
+        "三星": ["Samsung", "三星"],
     }
     for cn, en_list in brand_map.items():
-        if cn in query:
+        if cn in q:
             for en in en_list:
                 if en != cn:
-                    alt = query.replace(cn, en)
+                    alt = q.replace(cn, en)
                     if alt not in keywords:
                         keywords.append(alt)
 
-    return keywords[:5]  # 最多 5 个
+    # 3. 品质后缀（最重要的扩展！每个后缀对应不同的搜索意图，覆盖不同商品池）
+    suffixes = [
+        "全新", "二手", "自用", "正品",
+        "包邮", "实用", "便宜",
+        "闲置", "急出", "降价",
+        "正品", "好价", "超值",
+    ]
+    for suffix in suffixes:
+        kw = f"{q} {suffix}"
+        if kw not in keywords:
+            keywords.append(kw)
+
+    # 4. 品类词（提取核心名词+品类）
+    core_words = q.split()
+    if len(core_words) >= 2:
+        # 取前两个核心词 + 常见品类后缀
+        core = " ".join(core_words[:2])
+        for cat in ["耳机", "数码", "配件", "蓝牙"]:
+            cat_kw = f"{core} {cat}"
+            if cat_kw not in keywords:
+                keywords.append(cat_kw)
+
+    return keywords[:25]  # 最多 25 个关键词（足够覆盖 250x25 = 6250 条原始数据）
 
 
 # ============================================================
@@ -346,7 +546,7 @@ def search_items_cli(
         try:
             if deep_search:
                 keywords = _expand_keywords(query)
-                for kw in keywords[:3]:
+                for kw in keywords[:10]:  # 取前 10 个关键词 = 覆盖 10x 结果
                     try:
                         items = _call_goofish(kw, limit=min(limit, 50))
                         goofish_items.extend(items)

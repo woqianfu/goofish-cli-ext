@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "goofish-cli-ext"
-version = "0.6.0"
+version = "0.7.0"
 description = "闲鱼全能工具箱 — 搜索比价 + AI 文案生成 + 商品发布 + IM。基于 goofish-cli 扩展，吸收 xianyu-copywriter 文案模板。"
 readme = "README.md"
 license = { text = "Apache-2.0" }
