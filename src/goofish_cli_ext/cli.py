@@ -74,31 +74,30 @@ def search_cmd(
     table.add_column("标题", max_width=40)
     table.add_column("地点")
     table.add_column("信用")
-    table.add_column("链接")
 
     for i in items[:20]:
         price_str = f"¥{i['price']}" if isinstance(i['price'], int) else i['price']
-        url = i.get("url", "")
-        url_short = url[:35] + "..." if len(url) > 35 else url
         table.add_row(
             str(i["rank"]),
             price_str,
             i["title"][:38],
             i.get("location", ""),
             i.get("badge", ""),
-            f"[link={url}]打开[/link]" if url else "",
         )
 
     console.print(table)
 
-    # 结果底部输出可直接点击的链接列表
-    console.print("\n[bold]📎 点击链接直接购买：[/bold]")
+    # 结果底部输出链接列表（复制到浏览器打开）
+    console.print("\n[bold]📎 复制链接到浏览器打开：[/bold]")
     for i in items[:10]:
         url = i.get("url", "")
         if url:
-            console.print(f"  #{i['rank']:2d}  ¥{i['price']:>3d}  [link={url}]{url}[/link]")
+            console.print(f"  #{i['rank']:2d}  ¥{i['price']:>3d}  {url}")
         else:
             console.print(f"  #{i['rank']:2d}  ¥{i['price']:>3d}")
+
+    # 终端提示：Cmd+点击链接（iTerm2）或直接复制链接
+    console.print("[dim]💡 提示：选中链接后 Cmd+C 复制，粘贴到浏览器打开。iTerm2 支持 Cmd+点击打开。[/dim]")
 
     if len(items) > 20:
         console.print(f"[dim]... 还有 {len(items) - 20} 条，加 --limit {limit} 查看更多[/dim]")
