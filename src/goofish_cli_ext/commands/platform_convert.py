@@ -111,8 +111,8 @@ def _to_zhuanzhuan(text: str) -> tuple[str, list[str]]:
     has_quality = False
 
     for line in lines:
-        # 移除闲鱼 emoji 标签
-        line = re.sub(r"[⚠️💰📦🔒✅🏷️💡📎]", "", line)
+        # 移除闲鱼 emoji
+        line = re.sub(r"[⚠️💰📦🔒✅🏷️💡📎📝🎯⚡🎁🆕🔔]", "", line)
         # 移除关键词标签行
         if "🏷️" in line or "关键词" in line:
             continue
@@ -178,7 +178,9 @@ def _to_xianyu(text: str) -> tuple[str, list[str]]:
     new_lines = []
 
     # 检查是否已有关键词标签
-    has_keywords = any("🏷️" in l or "关键词" in l and "：" in l for l in lines)
+    has_keywords = any(
+        "🏷️" in l and "关键词" in l for l in lines
+    )
 
     for line in lines:
         # 替换转转/拍拍特有标识

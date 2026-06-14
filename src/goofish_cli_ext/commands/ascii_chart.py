@@ -56,21 +56,39 @@ def price_sparkline(
     # 数据点数量
     n = len(avgs)
 
-    # 压缩到 width 个数据点
+    # 压缩到 width 个数据点（使用窗口聚合）
     if n > width:
         step = n / width
-        compressed_idx = [int(i * step) for i in range(width)]
-        compressed_avgs = [avgs[i] for i in compressed_idx]
-        compressed_mins = [mins[i] for i in compressed_idx]
-        compressed_maxs = [maxs[i] for i in compressed_idx]
+        compressed_avgs = []
+        compressed_mins = []
+        compressed_maxs = []
+        for i in range(width):
+            start = int(i * step)
+            end = int((i + 1) * step)
+            window = avgs[start:end]
+            compressed_avgs.append(sum(window) // len(window))
+            compressed_mins.append(min(mins[start:end]))
+            compressed_maxs.append(max(maxs[start:end]))
         n = width
-    else:
-        compressed_avgs = avgs
-        compressed_mins = mins
-        compressed_maxs = maxs
+        # X 轴标签也压缩
+        compressed_dates = []
+        for i in range(width):
+            idx = int(i * len(dates) / width)
+            compressed_dates.append(dates[min(idx, len(dates)-1)])
+        dates = compressed_dates
 
     # 每个数据点占 1 列
     chart_cols = n
+
+    # 使用压缩后的数据
+    if n == len(avgs) and n > width:
+        # 已压缩
+        pass
+    else:
+        # 未压缩
+        compressed_avgs = avgs
+        compressed_mins = mins
+        compressed_maxs = maxs
 
     # 价格标签行
     def fmt_price(p: int) -> str:

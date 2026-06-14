@@ -102,10 +102,9 @@ def _is_fake_low_price(item: dict) -> bool:
     if price <= 5:
         return True
 
-    # 标题暗示价格不实
+    # 标题暗示价格不实（缩窄范围，避免误杀正常商品）
     fake_keywords = [
-        "看简介", "私聊", "议价", "定价", "具体价格",
-        "标价", "随机", "联系", "咨询", "vx", "微信",
+        "定价随机", "标价随机", "看简介定价",
     ]
     for kw in fake_keywords:
         if kw in title:
@@ -319,8 +318,9 @@ def search_items_cli(
     """
     all_items = []
 
-    # 尝试 Playwright 引擎（首选）
+    # 试 Playwright 引擎（首选）
     playwright_ok = False
+    playwright_error = ""
     if _HAS_PLAYWRIGHT:
         try:
             playwright_items = search_by_playwright(
@@ -331,31 +331,51 @@ def search_items_cli(
                 location=location,
             )
             if playwright_items:
+                for item in playwright_items:
+                    item["_source"] = "playwright"
                 all_items.extend(playwright_items)
                 playwright_ok = True
         except Exception as e:
-            pass  # 降级到 goofish-cli
+            playwright_error = str(e)[:100]
 
-    # Playwright 引擎失败或需要深度搜索补充时，用 goofish-cli 兜底
+    # goofish-cli 引擎补充（深度搜索或 Playwright 失败时）
     goofish_items = []
-    if not playwright_ok or deep_search:
+    goofish_error = ""
+    need_goofish = not playwright_ok or deep_search
+    if need_goofish:
         try:
             if deep_search:
                 keywords = _expand_keywords(query)
-                for kw in keywords[:3]:  # 深度搜索最多 3 个关键词
+                for kw in keywords[:3]:
                     try:
                         items = _call_goofish(kw, limit=min(limit, 50))
                         goofish_items.extend(items)
-                    except Exception:
+                    except Exception as e:
+                        goofish_error += f"[{kw}:{str(e)[:50]}]"
                         continue
             else:
                 goofish_items = _call_goofish(query, limit=min(limit, 50))
-        except Exception:
-            pass
+        except Exception as e:
+            goofish_error = str(e)[:100]
 
     all_items.extend(goofish_items)
 
-    engine = "playwright" if playwright_ok else "goofish-cli"
+    # engine 标签：准确反映数据来源
+    pw_count = sum(1 for x in all_items if x.get("_source") == "playwright")
+    goo_count = len(all_items) - pw_count
+    if pw_count > 0 and goo_count > 0:
+        engine = "playwright+goofish-cli"
+    elif pw_count > 0:
+        engine = "playwright"
+    else:
+        engine = "goofish-cli"
+
+    # 记录错误信息供返回
+    errors = []
+    if playwright_error:
+        errors.append(f"Playwright引擎: {playwright_error}")
+    if goofish_error:
+        errors.append(f"goofish-cli引擎: {goofish_error}")
     if not all_items:
         return {"items": [], "total": 0, "query": query, "stats": {}, "recommended": {}, "engine": engine}
 
@@ -385,8 +405,8 @@ def search_items_cli(
     for idx, item in enumerate(filtered, 1):
         item["rank"] = idx
 
-    # 品质分组
-    groups = _group_items(filtered)
+    # 品质分组（此时价格已经是 int，确保安全）
+    groups = _group_items([dict(i) for i in filtered])  # 深拷贝避免副作用
 
     # 统计信息
     prices = [i["price"] for i in filtered]

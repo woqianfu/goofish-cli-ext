@@ -114,7 +114,7 @@ _EXTRACT_JS = """
 
       const href = card.getAttribute('href') || '';
       const url = href.startsWith('http') ? href : 'https://www.goofish.com' + href;
-      const itemId = (url.match(/[?&]id=(\\d+)/) || [])[1] || '';
+      const itemId = (url.match(/[?&]id=(\d+)/) || [])[1] || (url.match(/\/item\/(\d+)/) || [])[1] || '';
 
       items.push({
         rank: idx + 1,
@@ -312,17 +312,7 @@ def search_by_playwright(
 ) -> list[dict]:
     """同步调用 Playwright 搜索
 
-    Args:
-        query: 搜索关键词
-        limit: 最大返回条数
-        sort: 排序（price-asc=价格从低到高, new=最新发布, credit=信用最好）
-        condition: 成色（new=全新, used=二手）
-        location: 位置（如"上海"）
-
-    Returns:
-        商品列表，每个 item 包含：
-        - rank, item_id, title, url, price, original_price
-        - condition, brand, extra, location, badge
+    安全地在有/无事件循环的场景下调用。
     """
     import asyncio
 
@@ -330,13 +320,25 @@ def search_by_playwright(
     if sort and sort not in SORT_MAP.values():
         sort = SORT_MAP.get(sort, "")
 
-    return asyncio.run(_run_search(
-        query=query,
-        limit=min(limit, 100),
-        sort=sort,
-        condition=condition,
-        location=location,
-    ))
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # 没有运行中的事件循环，正常启动
+        return asyncio.run(_run_search(
+            query=query, limit=min(limit, 100),
+            sort=sort, condition=condition, location=location,
+        ))
+
+    # 已有事件循环（如 Jupyter/Hermes），用新 loop 或 create_task
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        future = pool.submit(
+            lambda: asyncio.run(_run_search(
+                query=query, limit=min(limit, 100),
+                sort=sort, condition=condition, location=location,
+            ))
+        )
+        return future.result(timeout=120)
 
 
 # ============================================================

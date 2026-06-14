@@ -93,9 +93,23 @@ def save_snapshot(query: str, items: list[dict]):
         item_id = item.get("item_id", "")
         if not item_id:
             continue
-        price = item.get("price", 0)
-        if isinstance(price, str):
-            price = int(price.replace("¥", "").replace(",", "").strip() or "0")
+        raw_price = item.get("price")
+        if raw_price is None:
+            continue
+        if not isinstance(raw_price, (int, float, str)):
+            continue
+        if isinstance(raw_price, str):
+            raw_price = raw_price.replace("¥", "").replace(",", "").strip()
+            if not raw_price:
+                continue
+            try:
+                price = int(float(raw_price))
+            except (ValueError, TypeError):
+                continue
+        else:
+            price = int(raw_price)
+        if price <= 0:
+            continue
 
         conn.execute(
             """INSERT INTO price_snapshots
@@ -192,16 +206,27 @@ def get_price_trend(query: str, days: int = 14) -> dict:
         elif last_avg > first_avg * 1.05:
             trend = "up"
 
-    # 检测新出现的低价商品（上次未出现、这次出现的低价商品）
-    latest_items = [r for r in rows if r["snapshot_at"] >= cutoff + (days - 1) * 86400]
-    older_items = [r for r in rows if r["snapshot_at"] < cutoff + (days - 1) * 86400]
-    older_ids = set(r["item_id"] for r in older_items)
-    new_low_items = [
-        {"item_id": r["item_id"], "title": r["title"], "price": r["price"],
-         "url": r["url"], "condition": r["condition"], "location": r["location"]}
-        for r in latest_items
-        if r["item_id"] not in older_ids and r["price"] <= (latest.get("min", 99999) * 1.1)
-    ][:5]
+    # 检测新出现的低价商品
+    # 逻辑：最近一次快照中出现的、之前没出现过的低价商品
+    # 先找出所有不同的 snapshot 时间戳
+    snapshot_times = sorted(set(r["snapshot_at"] for r in rows), reverse=True)
+    if len(snapshot_times) >= 2:
+        # 最新一次快照
+        latest_ts = snapshot_times[0]
+        # 之前所有快照
+        prev_ts_set = set(snapshot_times[1:])
+
+        latest_items_list = [r for r in rows if r["snapshot_at"] == latest_ts]
+        older_ids = set(r["item_id"] for r in rows if r["snapshot_at"] in prev_ts_set)
+
+        new_low_items = [
+            {"item_id": r["item_id"], "title": r["title"], "price": r["price"],
+             "url": r["url"], "condition": r["condition"], "location": r["location"]}
+            for r in latest_items_list
+            if r["item_id"] not in older_ids and r["price"] <= (daily_prices[-1]["avg"] * 0.95 if daily_prices else 99999)
+        ][:5]
+    else:
+        new_low_items = []
 
     return {
         "query": query,
@@ -384,19 +409,19 @@ def suggest_price(
     median_price = prices[len(prices) // 2]
 
     # 成色调整
-    cond_multiplier = 1.0
+    # 兼容"new"/"used" 和 "95新"/"全新"两种成色参数
     condition_lower = condition.lower()
-    if "全新" in condition_lower:
-        cond_multiplier = 1.15  # 全新比均价高15%
-    elif "99" in condition_lower:
+    if condition_lower in ("new", "全新"):
+        cond_multiplier = 1.15
+    elif condition_lower in ("99新",):
         cond_multiplier = 1.08
-    elif "95" in condition_lower or "几乎" in condition_lower:
+    elif condition_lower in ("95新", "几乎全新"):
         cond_multiplier = 1.0
-    elif "9成" in condition_lower:
+    elif condition_lower in ("9成新",):
         cond_multiplier = 0.90
-    elif "8成" in condition_lower:
+    elif condition_lower in ("8成新",):
         cond_multiplier = 0.75
-    elif "瑕疵" in condition_lower or "磕碰" in condition_lower:
+    elif "瑕疵" in condition_lower or "磕碰" in condition_lower or condition_lower in ("used", "二手"):
         cond_multiplier = 0.60
 
     # 已卖出数据调整（如果真实卖出价比均价低，说明当前标价偏高）
@@ -511,27 +536,21 @@ def check_price_alerts(alerts: list[dict], items: list[dict]) -> list[dict]:
                         "current_min": N, "matched_items": [...]}, ...]
     """
     triggered = []
-    if not alerts:
+    if not alerts or not items:
         return triggered
 
-    item_prices = {}
-    for item in items:
-        q = item.get("query", "")
-        price = item.get("price", 99999)
-        if q not in item_prices or price < item_prices[q].get("price", 99999):
-            item_prices[q] = item
-
     for alert in alerts:
-        q = alert["query"]
-        if q in item_prices:
-            item = item_prices[q]
-            if item["price"] <= alert["target_price"]:
-                triggered.append({
-                    "query": q,
-                    "target_price": alert["target_price"],
-                    "current_min": item["price"],
-                    "matched_items": [item],
-                })
+        target = alert["target_price"]
+        # 检查当前 items 中是否有低于预警价的
+        matched = [i for i in items if i.get("price", 99999) <= target]
+        if matched:
+            min_price = min(i["price"] for i in matched)
+            triggered.append({
+                "query": alert["query"],
+                "target_price": target,
+                "current_min": min_price,
+                "matched_items": sorted(matched, key=lambda x: x["price"])[:3],
+            })
 
     return triggered
 
