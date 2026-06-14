@@ -46,14 +46,22 @@ def search_cmd(
     condition: str = typer.Option("", "--condition", "-c", help="成色筛选: new(全新) / used(二手)"),
     location: str = typer.Option("", "--loc", "-l", help="地区筛选: 如'上海'"),
     wechat: bool = typer.Option(False, "--wechat", "-w", help="微信端输出格式（纯文本 + 独占行链接）"),
+    aggressive: bool = typer.Option(False, "--aggressive", "-a", help="激进模式：25关键词×3排序×4城市=300任务穷举搜索"),
 ):
-    """闲鱼低价挖掘引擎
+    """闲鱼终极低价搜索 — 穷举所有策略组合找最低价
 
-    比闲鱼 App 的「价格从低到高」强得多：
-    - 多关键词轮询搜索，覆盖被隐藏的低价商品
-    - 自动过滤虚假低价（¥1 实际 ¥999 的坑）
-    - 智能品质评分，推荐「质优价廉」的好东西
-    - 支持排序、成色、地区筛选
+    原理：闲鱼每个搜索词独立返回前~250条结果。
+    通过穷举「关键词变体 × 排序 × 价格暗示 × 城市 × 成色」的组合，
+    突破单次搜索只能看到 250 条的限制。
+
+    默认模式：20 个关键词 × price-asc 排序 = 20 次搜索
+    激进模式 (--aggressive)：25 关键词 × 3 排序 × 4 城市 = 300 次搜索
+
+    推荐分组：
+    ⭐ 捡漏 — 低于市场价 30%+
+    🏆 质优价廉 — 高评分 + 低价
+    👤 个人卖家 — 识别真实个人卖家
+    💰 纯低价 — 只看价格
     """
     # 构建搜索描述字符串
     search_desc = query
@@ -72,6 +80,7 @@ def search_cmd(
         sort=sort,
         condition=condition,
         location=location,
+        aggressive=aggressive,
     )
 
     if json_output:
@@ -166,7 +175,10 @@ def search_cmd(
             wechat_lines.append("")
 
         wechat_lines.append("📎 链接可直接点击打开")
-        wechat_lines.append(f"💡 引擎:{result.get('engine','?')} | 深度搜索 | ⭐捡漏 👤个人卖家")
+        cov = result.get("coverage", {})
+        tasks = cov.get("tasks_attempted", 0)
+        items = cov.get("unique_items", 0)
+        wechat_lines.append(f"💡 穷举搜索: {tasks}任务→{items}件 | ⭐捡漏 👤个人卖家")
         console.print("\n".join(wechat_lines))
         return
 
