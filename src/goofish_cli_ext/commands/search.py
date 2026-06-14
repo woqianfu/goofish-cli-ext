@@ -9,12 +9,16 @@
 
 本模块通过多策略轮询 + 智能去重来解决这个问题。
 
+搜索方式：
+1. **Playwright 引擎（首选）** — 直接操作浏览器搜索闲鱼，不依赖 goofish-cli
+2. **goofish-cli 引擎（兜底）** — 如果 Playwright 不可用，自动降级
+
 策略：
 1. **多关键词轮询** — 同一商品用不同关键词搜索，覆盖不同的商品池
-2. **深度滚屏** — 滚屏 5 次抓取更多数据，突破闲鱼默认展示限制
-3. **虚标价过滤** — 识别"标 ¥1 实际 ¥999"的虚假低价
-4. **多排序采样** — 综合排序 + 最新发布，交叉覆盖
-5. **智能推荐** — 基于成色、信用、价格综合评分
+2. **虚标价过滤** — 识别"标 ¥1 实际 ¥999"的虚假低价
+3. **多排序采样** — 综合排序 + 最新发布，交叉覆盖
+4. **智能推荐** — 基于成色、信用、价格综合评分
+5. **搜索筛选** — 支持排序、成色、位置参数
 """
 
 from __future__ import annotations
@@ -23,6 +27,16 @@ import json
 import re
 import subprocess
 from typing import Optional
+
+# ============================================================
+# 尝试导入 Playwright 引擎
+# ============================================================
+_HAS_PLAYWRIGHT = False
+try:
+    from goofish_cli_ext.commands.playwright_search import search_by_playwright
+    _HAS_PLAYWRIGHT = True
+except Exception:
+    pass
 
 
 # ============================================================
@@ -270,11 +284,14 @@ def _deduplicate(items: list[dict]) -> list[dict]:
 
 def search_items_cli(
     query: str,
-    limit: int = 20,
+    limit: int = 30,
     min_price: Optional[int] = None,
     max_price: Optional[int] = None,
     sort_by_price: bool = True,
     deep_search: bool = True,
+    sort: str = "price-asc",
+    condition: str = "",
+    location: str = "",
 ) -> dict:
     """
     闲鱼低价挖掘引擎
@@ -286,6 +303,9 @@ def search_items_cli(
         max_price: 最高价筛选
         sort_by_price: 是否按价格排序
         deep_search: 是否启用深度搜索（多关键词轮询）
+        sort: 排序（price-asc=价格从低到高, new=最新, credit=信用最好）
+        condition: 成色筛选（new=全新, used=二手）
+        location: 位置筛选（如"上海"）
 
     Returns:
         {
@@ -294,22 +314,50 @@ def search_items_cli(
             "query": "...",
             "stats": { 统计信息 },
             "recommended": { 分组推荐 },
+            "engine": "playwright | goofish-cli",
         }
     """
     all_items = []
 
-    if deep_search:
-        # 深度搜索：多关键词轮询覆盖更多商品池
-        keywords = _expand_keywords(query)
-        for kw in keywords:
-            try:
-                items = _call_goofish(kw, limit=min(limit, 50))
-                all_items.extend(items)
-            except Exception:
-                continue
-    else:
-        # 普通搜索：单关键词
-        all_items = _call_goofish(query, limit=min(limit, 50))
+    # 尝试 Playwright 引擎（首选）
+    playwright_ok = False
+    if _HAS_PLAYWRIGHT:
+        try:
+            playwright_items = search_by_playwright(
+                query=query,
+                limit=min(limit, 50),
+                sort=sort if sort != "default" else "",
+                condition=condition,
+                location=location,
+            )
+            if playwright_items:
+                all_items.extend(playwright_items)
+                playwright_ok = True
+        except Exception as e:
+            pass  # 降级到 goofish-cli
+
+    # Playwright 引擎失败或需要深度搜索补充时，用 goofish-cli 兜底
+    goofish_items = []
+    if not playwright_ok or deep_search:
+        try:
+            if deep_search:
+                keywords = _expand_keywords(query)
+                for kw in keywords[:3]:  # 深度搜索最多 3 个关键词
+                    try:
+                        items = _call_goofish(kw, limit=min(limit, 50))
+                        goofish_items.extend(items)
+                    except Exception:
+                        continue
+            else:
+                goofish_items = _call_goofish(query, limit=min(limit, 50))
+        except Exception:
+            pass
+
+    all_items.extend(goofish_items)
+
+    engine = "playwright" if playwright_ok else "goofish-cli"
+    if not all_items:
+        return {"items": [], "total": 0, "query": query, "stats": {}, "recommended": {}, "engine": engine}
 
     # 去重
     all_items = _deduplicate(all_items)
@@ -357,4 +405,5 @@ def search_items_cli(
         "query": query,
         "stats": stats,
         "recommended": groups,
+        "engine": engine,
     }

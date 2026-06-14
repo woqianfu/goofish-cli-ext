@@ -42,6 +42,10 @@ def search_cmd(
     json_output: bool = typer.Option(False, "--json", "-j", help="JSON 格式输出"),
     deep: bool = typer.Option(True, "--deep/--no-deep", help="深度搜索（多关键词轮询，覆盖更多低价商品）"),
     recommend: bool = typer.Option(True, "--reco/--no-reco", help="展示品质推荐分组"),
+    sort: str = typer.Option("price-asc", "--sort-by", help="排序方式: price-asc(低价优先) / new(最新) / credit(信用)"),
+    condition: str = typer.Option("", "--condition", "-c", help="成色筛选: new(全新) / used(二手)"),
+    location: str = typer.Option("", "--loc", "-l", help="地区筛选: 如'上海'"),
+    wechat: bool = typer.Option(False, "--wechat", "-w", help="微信端输出格式（纯文本 + 独占行链接）"),
 ):
     """闲鱼低价挖掘引擎
 
@@ -49,8 +53,26 @@ def search_cmd(
     - 多关键词轮询搜索，覆盖被隐藏的低价商品
     - 自动过滤虚假低价（¥1 实际 ¥999 的坑）
     - 智能品质评分，推荐「质优价廉」的好东西
+    - 支持排序、成色、地区筛选
     """
-    result = search_items_cli(query, limit, min_price, max_price, sort_by_price, deep_search=deep)
+    # 构建搜索描述字符串
+    search_desc = query
+    if condition:
+        cond_label = {"new": "全新", "used": "二手"}.get(condition, condition)
+        search_desc += f" [{cond_label}]"
+    if location:
+        search_desc += f" [{location}]"
+    if sort:
+        sort_label = {"price-asc": "价格↑", "new": "最新", "credit": "信用"}.get(sort, sort)
+        search_desc += f" [{sort_label}]"
+
+    result = search_items_cli(
+        query, limit, min_price, max_price, sort_by_price,
+        deep_search=deep,
+        sort=sort,
+        condition=condition,
+        location=location,
+    )
 
     if json_output:
         console.print_json(json.dumps(result, ensure_ascii=False))
@@ -94,6 +116,44 @@ def search_cmd(
         )
 
     console.print(table)
+
+    # 微信端纯文本格式
+    if wechat:
+        console.print()  # 换行
+        wechat_lines = [f"🔍 {search_desc} | 共{result['total']}件 | ¥{min_p}~¥{max_p} | 均价¥{avg_p}"]
+        wechat_lines.append("")
+
+        # 质优价廉推荐
+        rec = result.get("recommended", {})
+        if rec.get("best"):
+            wechat_lines.append("🏆 质优价廉推荐：")
+            for i in rec["best"][:5]:
+                badge = f" [{i.get('badge','')}]" if i.get('badge') else ""
+                loc2 = i.get("location", "")
+                cond2 = i.get("condition", "")
+                wechat_lines.append(f"  #{i['rank']} ¥{i['price']} {cond2} {loc2}{badge}")
+                wechat_lines.append(f"  {i.get('url', '')}")
+            wechat_lines.append("")
+
+        if rec.get("cheapest"):
+            wechat_lines.append("💰 纯低价捡漏：")
+            for i in rec["cheapest"][:3]:
+                wechat_lines.append(f"  #{i['rank']} ¥{i['price']} {i['title'][:25]}")
+                wechat_lines.append(f"  {i.get('url', '')}")
+            wechat_lines.append("")
+
+        if rec.get("good"):
+            wechat_lines.append("✨ 品质好物：")
+            for i in rec["good"][:3]:
+                badge = f" [{i.get('badge','')}]" if i.get('badge') else ""
+                wechat_lines.append(f"  #{i['rank']} ¥{i['price']} {i.get('condition','')} {i.get('location','')}{badge}")
+                wechat_lines.append(f"  {i.get('url', '')}")
+            wechat_lines.append("")
+
+        wechat_lines.append("📎 所有链接均可直接点击打开")
+        wechat_lines.append(f"💡 引擎:{result.get('engine','?')} | 已过滤虚假低价 | 深度搜索")
+        console.print("\n".join(wechat_lines))
+        return
 
     # 质优价廉推荐
     if recommend and result.get("recommended"):
