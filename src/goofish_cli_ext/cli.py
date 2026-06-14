@@ -401,20 +401,34 @@ def trend_cmd(
     query: str = typer.Argument(..., help="关键词"),
     days: int = typer.Option(14, "--days", "-d", help="回溯天数"),
 ):
-    """查看价格走势"""
+    """查看价格走势（含 ASCII 图表）"""
     from goofish_cli_ext.commands.price_watch import get_price_trend
+    from goofish_cli_ext.commands.ascii_chart import price_sparkline
     trend = get_price_trend(query, days=days)
 
     if trend["snapshots"] == 0:
         console.print(f"[yellow]「{query}」暂无历史数据。搜索几次后趋势会自动生成。[/yellow]")
         return
 
+    # 生成 ASCII 走势图
+    chart_lines = ""
+    if len(trend["daily_prices"]) >= 2:
+        dates = [d["date"][5:] for d in trend["daily_prices"]]  # MM-DD
+        avgs = [d["avg"] for d in trend["daily_prices"]]
+        mins = [d["min"] for d in trend["daily_prices"]]
+        maxs = [d["max"] for d in trend["daily_prices"]]
+        chart_lines = price_sparkline(dates, avgs, mins, maxs)
+
+    trend_icon = "📉" if trend["trend"] == "down" else "📈" if trend["trend"] == "up" else "➡️"
+    trend_label = "下跌" if trend["trend"] == "down" else "上涨" if trend["trend"] == "up" else "平稳"
+
     console.print(Panel(
         f"[bold]{query}[/bold]\n"
         f"采样: {trend['snapshots']} 条数据 / {len(trend['daily_prices'])} 天\n"
         f"当前: ¥{trend['current_min']} ~ ¥{trend['current_avg']} ~ ¥{trend['current_max']}\n"
         f"历史: ¥{trend['min_overall']} ~ ¥{trend['avg_overall']} ~ ¥{trend['max_overall']}\n"
-        f"趋势: {'📉 下跌' if trend['trend']=='down' else '📈 上涨' if trend['trend']=='up' else '➡️ 平稳'}",
+        f"趋势: {trend_icon} {trend_label}\n\n"
+        f"{chart_lines}",
         title="📈 价格趋势",
         border_style="cyan",
     ))
@@ -496,6 +510,95 @@ def suggest_cmd(
         title="💰 定价建议",
         border_style=color,
     ))
+
+
+# ============================================================
+# negotiate — 议价话术模板
+# ============================================================
+@app.command(name="negotiate")
+def negotiate_cmd(
+    scenario: str = typer.Argument("", help="场景: 小刀/大刀/屠龙刀/打包/面交/质量问题"),
+    price: int = typer.Option(0, "--price", "-p", help="你的标价"),
+    condition: str = typer.Option("95新", "--condition", "-c", help="成色"),
+    market_price: int = typer.Option(0, "--market", "-m", help="市场均价"),
+    counter_offer: int = typer.Option(0, "--counter", "-o", help="你能接受的价格"),
+    low_price: int = typer.Option(0, "--low", "-l", help="买家出价"),
+    accessory: str = typer.Option("小配件", "--accessory", "-a", help="附送配件"),
+    location: str = typer.Option("", "--location", "-L", help="面交地点"),
+):
+    """议价话术模板 — 买家砍价时的应对话术库"""
+    from goofish_cli_ext.commands.negotiation import get_negotiation_script, format_negotiation
+
+    if not scenario:
+        # 列出所有场景
+        result = get_negotiation_script()
+        console.print(Panel(format_negotiation(result), title="📋 议价场景", border_style="yellow"))
+        console.print("\n[dim]使用: goofish-x negotiate 小刀 --price 248[/dim]")
+        return
+
+    result = get_negotiation_script(
+        scenario=scenario,
+        price=price,
+        condition=condition,
+        market_price=market_price or int(price * 1.1) if price else 0,
+        counter_offer=counter_offer or int(price * 0.85) if price else 0,
+        low_price=low_price or int(price * 0.5) if price else 0,
+        discount=int(price * 0.1) if price else 0,
+        accessory=accessory,
+        location=location,
+    )
+
+    if "error" in result:
+        console.print(f"[red]{result['error']}[/red]")
+        return
+
+    console.print(Panel(format_negotiation(result), title=f"💬 {scenario} — {result['description']}", border_style="yellow"))
+    copy_to_clipboard(result.get("templates", [{}])[0].get("text", "") if result.get("templates") else "")
+
+
+# ============================================================
+# convert — 多平台文案互转
+# ============================================================
+@app.command(name="convert")
+def convert_cmd(
+    to: str = typer.Argument(..., help="目标平台: 转转/拍拍/闲鱼"),
+    text: str = typer.Option("", "--text", "-t", help="要转换的文案（留空从剪贴板读取）"),
+    from_platform: str = typer.Option("", "--from", "-f", help="来源平台（留空自动检测）"),
+):
+    """多平台文案互转 — 闲鱼 ↔ 转转 ↔ 拍拍"""
+    from goofish_cli_ext.commands.platform_convert import convert_copy, PLATFORMS
+
+    if to not in PLATFORMS:
+        console.print(f"[red]目标平台必须是: {', '.join(PLATFORMS.keys())}[/red]")
+        return
+
+    # 如果没提供文案，尝试从剪贴板读
+    if not text:
+        try:
+            import subprocess
+            text = subprocess.run(["pbpaste"], capture_output=True, text=True).stdout.strip()
+            if text:
+                console.print("[dim]从剪贴板读取文案[/dim]")
+        except Exception:
+            pass
+
+    if not text:
+        console.print("[yellow]请提供文案: --text '你的文案' 或先复制到剪贴板[/yellow]")
+        return
+
+    result = convert_copy(text, from_platform=from_platform, to_platform=to)
+
+    console.print(Panel(
+        result["converted"],
+        title=f"🔄 {result['from_platform']} → {result['to_platform']}",
+        border_style="green",
+    ))
+
+    console.print("\n[dim]改动:[/dim]")
+    for c in result["changes"]:
+        console.print(f"  • {c}")
+
+    copy_to_clipboard(result["converted"])
 
 
 # ============================================================
