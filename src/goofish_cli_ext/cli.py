@@ -342,6 +342,163 @@ def publish_cmd(
 
 
 # ============================================================
+# watch — 价格预警管理
+# ============================================================
+@app.command(name="watch")
+def watch_cmd(
+    action: str = typer.Argument("list", help="操作: add / list / remove"),
+    query: str = typer.Option("", "--query", "-q", help="关键词"),
+    target_price: int = typer.Option(0, "--price", "-p", help="目标价"),
+):
+    """管理闲鱼价格预警"""
+    from goofish_cli_ext.commands.price_watch import (
+        set_price_alert, list_price_alerts, remove_price_alert,
+    )
+
+    if action == "add":
+        if not query or target_price <= 0:
+            console.print("[red]请指定 --query 和 --price[/red]")
+            return
+        result = set_price_alert(query, target_price)
+        console.print(f"[green]✅ 预警已设置：当「{query}」低于 ¥{target_price} 时通知[/green]")
+
+    elif action == "remove":
+        if not query:
+            console.print("[red]请指定 --query[/red]")
+            return
+        remove_price_alert(query)
+        console.print(f"[yellow]🗑️ 已删除「{query}」的预警[/yellow]")
+
+    else:  # list
+        alerts = list_price_alerts()
+        if not alerts:
+            console.print("[yellow]没有设置价格预警[/yellow]")
+            console.print("[dim]添加预警：goofish-x watch add --query '南卡 Clip Super2' --price 250[/dim]")
+            return
+        console.print("[bold]📋 价格预警列表：[/bold]")
+        for a in alerts:
+            console.print(f"  🔔 {a['query']} → 低于 ¥{a['target_price']} 时通知")
+
+
+# ============================================================
+# price-summary — 价格汇总报告
+# ============================================================
+@app.command(name="price-summary")
+def price_summary_cmd(
+    query: str = typer.Argument(..., help="关键词"),
+):
+    """查看价格监控汇总：行情 + 已卖出分析 + 定价建议"""
+    from goofish_cli_ext.commands.price_watch import format_price_summary
+    summary = format_price_summary(query)
+    console.print(Panel(summary, title=f"📊 {query} 价格报告", border_style="cyan"))
+
+
+# ============================================================
+# trend — 价格趋势
+# ============================================================
+@app.command(name="trend")
+def trend_cmd(
+    query: str = typer.Argument(..., help="关键词"),
+    days: int = typer.Option(14, "--days", "-d", help="回溯天数"),
+):
+    """查看价格走势"""
+    from goofish_cli_ext.commands.price_watch import get_price_trend
+    trend = get_price_trend(query, days=days)
+
+    if trend["snapshots"] == 0:
+        console.print(f"[yellow]「{query}」暂无历史数据。搜索几次后趋势会自动生成。[/yellow]")
+        return
+
+    console.print(Panel(
+        f"[bold]{query}[/bold]\n"
+        f"采样: {trend['snapshots']} 条数据 / {len(trend['daily_prices'])} 天\n"
+        f"当前: ¥{trend['current_min']} ~ ¥{trend['current_avg']} ~ ¥{trend['current_max']}\n"
+        f"历史: ¥{trend['min_overall']} ~ ¥{trend['avg_overall']} ~ ¥{trend['max_overall']}\n"
+        f"趋势: {'📉 下跌' if trend['trend']=='down' else '📈 上涨' if trend['trend']=='up' else '➡️ 平稳'}",
+        title="📈 价格趋势",
+        border_style="cyan",
+    ))
+
+    if trend.get("new_low_items"):
+        console.print("\n[green]🆕 新出现的低价商品：[/green]")
+        for item in trend["new_low_items"]:
+            console.print(f"  ¥{item['price']} {item.get('title','')[:30]}")
+            console.print(f"  {item.get('url', '')}")
+
+
+# ============================================================
+# sold — 已卖出分析
+# ============================================================
+@app.command(name="sold")
+def sold_cmd(
+    query: str = typer.Argument(..., help="关键词"),
+):
+    """分析可能已卖出的商品价格（成交价参考）"""
+    from goofish_cli_ext.commands.price_watch import analyze_sold_prices
+    sold = analyze_sold_prices(query)
+
+    if sold["sold_count"] == 0:
+        console.print(f"[yellow]「{query}」暂无已卖出数据。持续搜索后会积累数据。[/yellow]")
+        return
+
+    console.print(Panel(
+        f"[bold]{query}[/bold]\n"
+        f"已卖出: [bold]{sold['sold_count']}[/bold] 件\n"
+        f"成交均价: [green]¥{sold['sold_avg_price']}[/green]  "
+        f"(¥{sold['sold_min_price']} ~ ¥{sold['sold_max_price']})\n"
+        f"当前在售均价: ¥{sold['listing_avg_price']} ({sold['listing_count']}件)",
+        title="📈 已卖出价格分析",
+        border_style="green",
+    ))
+
+    console.print("\n[bold]出售记录（按价格排序）：[/bold]")
+    for item in sold["sold_items"][:10]:
+        console.print(f"  ¥{item['price']:>4d}  {item.get('title','')[:40]}  [{item.get('condition','')}]")
+        if item.get("last_seen"):
+            console.print(f"       最后出现: {item['last_seen']}  (上架{item['days_listed']}天)")
+
+
+# ============================================================
+# suggest — 定价建议
+# ============================================================
+@app.command(name="suggest")
+def suggest_cmd(
+    query: str = typer.Argument(..., help="关键词"),
+    condition: str = typer.Option("95新", "--condition", "-c", help="你的商品成色"),
+    location: str = typer.Option("", "--location", "-l", help="地区"),
+):
+    """基于行情+成色给出定价建议"""
+    from goofish_cli_ext.commands.price_watch import suggest_price
+    result = suggest_price(query, condition=condition, location=location)
+
+    if result["confidence"] == "low" and "数据不足" in result.get("reason", ""):
+        console.print(f"[yellow]{result['reason']}[/yellow]")
+        return
+
+    # 推荐策略
+    tier_colors = {"fast": "yellow", "balanced": "green", "patient": "blue"}
+    tier_icons = {"fast": "⚡", "balanced": "🎯", "patient": "🧘"}
+    tier = result.get("recommended_tier", "balanced")
+    color = tier_colors.get(tier, "green")
+    icon = tier_icons.get(tier, "🎯")
+
+    console.print(Panel(
+        f"[bold]{query}[/bold]  (成色: {condition})\n\n"
+        f"[bold {color}]{icon} 推荐策略: {tier}[/bold {color}]\n"
+        f"  [bold green]建议定价: ¥{result['suggested_price']}[/bold green] ← 推荐\n"
+        f"  ⚡快速出手: ¥{result['fast_sell_price']}  (打9折快速卖出)\n"
+        f"  🧘耐心等待: ¥{result['patient_price']}  (加8%挂高价)\n\n"
+        f"📊 参考数据:\n"
+        f"  在售均价: ¥{result['avg_listing_price']}  |  中位数: ¥{result['median_listing_price']}\n"
+        f"  价格区间: ¥{result['price_range'][0]} ~ ¥{result['price_range'][-1]}\n"
+        f"  已卖出均价: ¥{result['avg_sold_price'] if result['avg_sold_price'] else '暂无数据'}\n\n"
+        f"💡 {result['reason']}",
+        title="💰 定价建议",
+        border_style=color,
+    ))
+
+
+# ============================================================
 # version
 # ============================================================
 @app.command(name="version")
