@@ -35,14 +35,22 @@ console = Console()
 @app.command(name="search")
 def search_cmd(
     query: str = typer.Argument(..., help="搜索关键词"),
-    limit: int = typer.Option(20, "--limit", "-n", help="返回条数"),
+    limit: int = typer.Option(30, "--limit", "-n", help="返回条数"),
     min_price: Optional[int] = typer.Option(None, "--min", "-m", help="最低价筛选"),
     max_price: Optional[int] = typer.Option(None, "--max", "-M", help="最高价筛选"),
     sort_by_price: bool = typer.Option(True, "--sort/--no-sort", help="按价格排序"),
     json_output: bool = typer.Option(False, "--json", "-j", help="JSON 格式输出"),
+    deep: bool = typer.Option(True, "--deep/--no-deep", help="深度搜索（多关键词轮询，覆盖更多低价商品）"),
+    recommend: bool = typer.Option(True, "--reco/--no-reco", help="展示品质推荐分组"),
 ):
-    """搜索闲鱼商品，按价格排序，展示最低价"""
-    result = search_items_cli(query, limit, min_price, max_price, sort_by_price)
+    """闲鱼低价挖掘引擎
+
+    比闲鱼 App 的「价格从低到高」强得多：
+    - 多关键词轮询搜索，覆盖被隐藏的低价商品
+    - 自动过滤虚假低价（¥1 实际 ¥999 的坑）
+    - 智能品质评分，推荐「质优价廉」的好东西
+    """
+    result = search_items_cli(query, limit, min_price, max_price, sort_by_price, deep_search=deep)
 
     if json_output:
         console.print_json(json.dumps(result, ensure_ascii=False))
@@ -86,6 +94,30 @@ def search_cmd(
         )
 
     console.print(table)
+
+    # 质优价廉推荐
+    if recommend and result.get("recommended"):
+        rec = result["recommended"]
+        if rec.get("best"):
+            console.print("\n[bold green]🏆 质优价廉推荐（品质好 + 价格低）：[/bold green]")
+            for i in rec["best"][:5]:
+                badge = f" [{i.get('badge','')}]" if i.get('badge') else ""
+                console.print(f"  #{i['rank']:2d}  ¥{i['price']:>3d}  {i['title'][:50]}  {badge}")
+                console.print(f"       {i.get('url', '')}")
+
+        if rec.get("cheapest") and len(rec.get("cheapest", [])) > 2:
+            console.print("\n[bold yellow]💰 纯低价捡漏（不管成色，只看价格）：[/bold yellow]")
+            for i in rec["cheapest"][:3]:
+                badge = f" [{i.get('badge','')}]" if i.get('badge') else ""
+                console.print(f"  #{i['rank']:2d}  ¥{i['price']:>3d}  {i['title'][:50]}  {badge}")
+                console.print(f"       {i.get('url', '')}")
+
+        if rec.get("good"):
+            console.print("\n[bold blue]✨ 品质好物（成色好、信用高）：[/bold blue]")
+            for i in rec["good"][:3]:
+                badge = f" [{i.get('badge','')}]" if i.get('badge') else ""
+                console.print(f"  #{i['rank']:2d}  ¥{i['price']:>3d}  {i['title'][:50]}  {badge}")
+                console.print(f"       {i.get('url', '')}")
 
     # 结果底部输出链接列表（复制到浏览器打开）
     console.print("\n[bold]📎 复制链接到浏览器打开：[/bold]")
