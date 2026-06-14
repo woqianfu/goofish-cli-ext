@@ -71,21 +71,34 @@ def search_cmd(
     table = Table(show_header=True, header_style="bold cyan")
     table.add_column("#", style="dim")
     table.add_column("价格", style="bold green", justify="right")
-    table.add_column("标题", max_width=50)
+    table.add_column("标题", max_width=40)
     table.add_column("地点")
     table.add_column("信用")
+    table.add_column("链接")
 
     for i in items[:20]:
         price_str = f"¥{i['price']}" if isinstance(i['price'], int) else i['price']
+        url = i.get("url", "")
+        url_short = url[:35] + "..." if len(url) > 35 else url
         table.add_row(
             str(i["rank"]),
             price_str,
-            i["title"][:48],
+            i["title"][:38],
             i.get("location", ""),
             i.get("badge", ""),
+            f"[link={url}]打开[/link]" if url else "",
         )
 
     console.print(table)
+
+    # 结果底部输出可直接点击的链接列表
+    console.print("\n[bold]📎 点击链接直接购买：[/bold]")
+    for i in items[:10]:
+        url = i.get("url", "")
+        if url:
+            console.print(f"  #{i['rank']:2d}  ¥{i['price']:>3d}  [link={url}]{url}[/link]")
+        else:
+            console.print(f"  #{i['rank']:2d}  ¥{i['price']:>3d}")
 
     if len(items) > 20:
         console.print(f"[dim]... 还有 {len(items) - 20} 条，加 --limit {limit} 查看更多[/dim]")
