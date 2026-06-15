@@ -571,9 +571,27 @@ def negotiate_cmd(
     low_price: int = typer.Option(0, "--low", "-l", help="买家出价"),
     accessory: str = typer.Option("小配件", "--accessory", "-a", help="附送配件"),
     location: str = typer.Option("", "--location", "-L", help="面交地点"),
+    buyer_msg: str = typer.Option("", "--buyer", "-b", help="买家说了什么（传入后自动分析+生成回复）"),
+    product_name: str = typer.Option("", "--product", "-P", help="商品名称（配合 --buyer 使用）"),
 ):
     """议价话术模板 — 买家砍价时的应对话术库"""
-    from goofish_cli_ext.commands.negotiation import get_negotiation_script, format_negotiation
+    from goofish_cli_ext.commands.negotiation import get_negotiation_script, format_negotiation, smart_negotiate
+
+    # 智能回复模式：传入买家说的话，自动分析+生成
+    if buyer_msg:
+        result = smart_negotiate(
+            buyer_message=buyer_msg,
+            our_price=price or 0,
+            product_name=product_name or "商品",
+            condition=condition,
+        )
+        console.print(Panel(
+            format_negotiation(result),
+            title=f"💬 {result['scenario']} — 智能回复",
+            border_style="yellow",
+        ))
+        copy_to_clipboard(result.get("templates", [{}])[0].get("text", "") if result.get("templates") else "")
+        return
 
     if not scenario:
         # 列出所有场景

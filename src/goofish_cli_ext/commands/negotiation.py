@@ -275,6 +275,141 @@ def analyze_price_reason(
     return {"scenario": "小刀", "confidence": "low"}
 
 
+def smart_negotiate(
+    buyer_message: str,
+    our_price: int = 0,
+    product_name: str = "",
+    condition: str = "",
+) -> dict:
+    """
+    智能议价回复生成
+
+    输入买家说的内容 + 你的商品信息，返回最优回复话术。
+
+    Args:
+        buyer_message: 买家说了什么
+        our_price: 你的标价
+        product_name: 商品名称
+        condition: 成色
+
+    Returns:
+        {
+            "smart_reply": True,
+            "buyer_message": "...",
+            "scenario": "...",
+            "description": "...",
+            "confidence": "...",
+            "templates": [{"title": "...", "text": "..."}, ...],
+        }
+    """
+    # 先分析买家意图
+    analysis = analyze_price_reason(buyer_message)
+    scenario = analysis["scenario"]
+
+    # 根据买家消息的详细程度生成定制回复
+    msg = buyer_message.lower()
+    templates = []
+
+    if scenario == "小刀":
+        templates.append({
+            "title": "爽快成交",
+            "text": f"好的，{product_name} {our_price}就{our_price}吧，爽快人交个朋友。链接直接拍，今天发。",
+        })
+        templates.append({
+            "title": "送小配件",
+            "text": f"老板，{our_price}确实最低了，不过我送你个原装配件/收纳袋，也算是心意了。",
+        })
+        templates.append({
+            "title": "强调性价比",
+            "text": f"这个价真的很划算了。你可以去搜一下同款，我这个{condition}这个价格绝对是最低的之一。",
+        })
+
+    elif scenario == "大刀":
+        # 买家说贵了，用具体数据反驳
+        templates.append({
+            "title": "对比行情",
+            "text": f"你可以去闲鱼搜一下同款，我这个价已经最低了。同成色的都挂{int(our_price * 1.15)}以上。",
+        })
+        templates.append({
+            "title": "强调品质",
+            "text": f"这个价确实没法再低了。{product_name}是{condition}，配件齐全，现货实拍，买了绝对值。",
+        })
+        templates.append({
+            "title": "适当让步",
+            "text": f"最多给你便宜{int(our_price * 0.05)}块，再低真的出不了了。",
+        })
+
+    elif scenario == "屠龙刀":
+        templates.append({
+            "title": "礼貌拒绝",
+            "text": f"感谢关注，但{our_price}这个价确实出不了哈。你可以看看别的卖家，祝早日买到合适的。",
+        })
+        counter = max(int(our_price * 0.7), our_price - 50)
+        templates.append({
+            "title": "还个价",
+            "text": f"{our_price}确实不行，{counter}的话我可以考虑，你看看能不能加点。",
+        })
+        templates.append({
+            "title": "冷处理",
+            "text": f"你先看看吧，有需要再联系。",
+        })
+
+    elif scenario == "面交":
+        templates.append({
+            "title": "同意面交",
+            "text": f"可以面交，地铁站附近都行。当面验货，没问题再付。我给你留到周末。",
+        })
+        templates.append({
+            "title": "安全提醒",
+            "text": f"可以面交，到人多的地方最好。东西我带着，你看满意了再拿。支持验货。",
+        })
+
+    elif scenario == "打包":
+        discount = int(our_price * 0.15)
+        templates.append({
+            "title": "打包优惠",
+            "text": f"两件一起的话，给你便宜{discount}块，再包个邮。单买确实没法少。",
+        })
+
+    elif scenario == "质量问题":
+        templates.append({
+            "title": "提供证据",
+            "text": f"我可以给你拍视频，各个角度都拍给你看。保证和我描述的一样，实物实拍。",
+        })
+        templates.append({
+            "title": "接受验货",
+            "text": f"你可以找人鉴定，或者当面验货。假一赔十。",
+        })
+
+    else:
+        # 兜底：判断不出来的时候给通用回复
+        templates.append({
+            "title": "通用回复",
+            "text": f"你好，{product_name} {our_price}，{condition}，实物实拍。感兴趣可以拍，爽快包邮。",
+        })
+
+    description_map = {
+        "小刀": "买家想小刀砍价（10%以内）",
+        "大刀": "买家觉得贵了，大刀砍价（10-30%）",
+        "屠龙刀": "买家出了远低于预期的价格",
+        "面交": "买家希望当面交易",
+        "打包": "买家想要多件打包",
+        "质量问题": "买家对商品质量有疑虑",
+    }
+
+    return {
+        "smart_reply": True,
+        "buyer_message": buyer_message,
+        "scenario": scenario,
+        "description": description_map.get(scenario, "买家来询价"),
+        "confidence": analysis["confidence"],
+        "templates": templates,
+    }
+
+
+# ============================================================
+
+
 # ============================================================
 # CLI 格式化输出
 # ============================================================
@@ -289,6 +424,19 @@ def format_negotiation(scenario_data: dict) -> str:
         for s in scenario_data["available_scenarios"]:
             strategies = "、".join(s["strategies"])
             lines.append(f"  {s['key']:6s} — {s['name']}  [{strategies}]")
+        return "\n".join(lines)
+
+    if "smart_reply" in scenario_data:
+        # 智能回复模式
+        lines = [
+            f"💬 买家说: \"{scenario_data.get('buyer_message', '')}\"",
+            f"📊 分析: {scenario_data['description']} (置信度: {scenario_data.get('confidence', '中')})",
+            "",
+        ]
+        for t in scenario_data["templates"]:
+            lines.append(f"[{t['title']}]")
+            lines.append(f"  {t['text']}")
+            lines.append("")
         return "\n".join(lines)
 
     lines = [
